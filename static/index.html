@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AudioVox — Lecteur FR/AR</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <span class="logo">🎧 AudioVox</span>
+    <span class="subtitle" id="engine-badge">Chargement…</span>
+  </div>
+  <div class="header-right">
+    <div class="lang-switcher">
+      <button class="lang-btn active" id="btn-fr" onclick="setLanguage('fr')">🇫🇷 Français</button>
+      <button class="lang-btn"        id="btn-ar" onclick="setLanguage('ar')">🇸🇦 العربية</button>
+    </div>
+    <button class="icon-btn" id="theme-btn" onclick="toggleTheme()" title="Thème">🌙</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ═══ SIDEBAR ═══════════════════════════════════════════════════════════ -->
+  <aside class="sidebar">
+
+    <!-- Upload book -->
+    <div class="card">
+      <h3 class="card-title">📖 Livre</h3>
+      <div class="drop-zone" id="drop-zone"
+           onclick="document.getElementById('book-input').click()"
+           ondragover="ev.preventDefault()" ondrop="handleDrop(event)">
+        <div class="drop-icon">📚</div>
+        <p class="drop-label">Glissez ou cliquez</p>
+        <span class="drop-hint">TXT · PDF · EPUB</span>
+      </div>
+      <input type="file" id="book-input" accept=".txt,.pdf,.epub" onchange="uploadBook(this)" style="display:none" />
+      <div class="book-meta hidden" id="book-meta">
+        <div class="book-name" id="book-name"></div>
+        <div class="book-stats" id="book-stats"></div>
+      </div>
+    </div>
+
+    <!-- Voice cloning -->
+    <div class="card">
+      <h3 class="card-title">🎤 Ma voix</h3>
+      <p class="card-hint" id="clone-hint">Enregistrez votre voix pour cloner votre timbre</p>
+      <button class="btn-record" id="btn-record" onclick="toggleRecording()">
+        <span id="rec-icon">⏺</span> <span id="rec-label">Enregistrer (10 s)</span>
+      </button>
+      <div class="rec-timer hidden" id="rec-timer">⏱ <span id="rec-secs">0</span>s</div>
+      <div class="voice-ok hidden" id="voice-ok">✅ Voix prête</div>
+      <div class="or-sep">— ou —</div>
+      <button class="btn-secondary" onclick="document.getElementById('voice-input').click()">
+        📁 Importer un fichier audio
+      </button>
+      <input type="file" id="voice-input" accept=".wav,.mp3,.ogg,.webm" onchange="uploadVoice(this)" style="display:none" />
+    </div>
+
+    <!-- Chapters list -->
+    <div class="card chapters-card">
+      <h3 class="card-title">📑 Chapitres</h3>
+      <div id="chapters-list" class="chapters-list">
+        <p class="empty-hint">Aucun livre chargé</p>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ═══ MAIN ═══════════════════════════════════════════════════════════════ -->
+  <main class="main">
+
+    <!-- Player bar -->
+    <div class="player" id="player">
+      <div class="player-controls">
+        <button class="ctrl-btn" onclick="skipParagraph(-1)" title="Précédent">⏮</button>
+        <button class="ctrl-btn play-btn" id="play-btn" onclick="togglePlay()">▶</button>
+        <button class="ctrl-btn" onclick="skipParagraph(1)" title="Suivant">⏭</button>
+        <button class="ctrl-btn" id="auto-btn" onclick="toggleAutoplay()" title="Lecture auto">🔁</button>
+      </div>
+
+      <div class="player-track">
+        <div class="progress-wrap" id="progress-wrap" onclick="seekAudio(event)">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="time-row">
+          <span id="cur-time">0:00</span>
+          <span id="tot-time">0:00</span>
+        </div>
+      </div>
+
+      <div class="player-opts">
+        <label class="opt-label">⚡</label>
+        <input type="range" class="opt-slider" min="0.5" max="2.0" step="0.1" value="1.0"
+               id="speed-slider" oninput="setSpeed(this.value)" />
+        <span id="speed-val">1.0×</span>
+
+        <label class="opt-label" style="margin-left:12px">🔊</label>
+        <input type="range" class="opt-slider" min="0" max="1" step="0.05" value="1"
+               id="vol-slider" oninput="setVolume(this.value)" />
+      </div>
+
+      <audio id="audio-el"
+             onended="onAudioEnd()"
+             ontimeupdate="updateProgress()"
+             onloadedmetadata="updateDuration()"></audio>
+    </div>
+
+    <!-- Book reader -->
+    <div class="reader" id="reader">
+
+      <!-- Welcome screen -->
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🎧</div>
+        <h2>Bienvenue sur AudioVox</h2>
+        <p>Chargez un livre TXT, PDF ou EPUB et choisissez votre langue</p>
+        <div class="features-grid">
+          <div class="feat">🇫🇷<br/>Français</div>
+          <div class="feat">🇸🇦<br/>العربية</div>
+          <div class="feat">🎤<br/>Clone vocal</div>
+          <div class="feat">📚<br/>PDF · EPUB</div>
+        </div>
+      </div>
+
+      <!-- Paragraphs -->
+      <div id="paras" class="paras hidden"></div>
+
+    </div>
+
+  </main>
+</div>
+
+<!-- Loading overlay -->
+<div class="loading hidden" id="loading">
+  <div class="spinner"></div>
+  <div id="loading-msg">Synthèse vocale…</div>
+</div>
+
+<!-- Toasts -->
+<div id="toasts"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
