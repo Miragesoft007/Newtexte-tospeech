@@ -1,133 +1,165 @@
 """
-AudioVox — Interface Gradio identique à la démo VoxCPM2
-+ onglet Lecture de livre (TXT / PDF / EPUB / DOCX)
-+ support français & arabe
+AudioVox — Lecteur de livres audio avec clonage vocal
+Moteur : Coqui XTTS v2 (clonage réel) → VoxCPM2 → espeak-ng
 """
 
 import os
-import sys
+import shutil
 import logging
 import subprocess
 import tempfile
-import shutil
 import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
 
 import gradio as gr
-
 from book_parser import BookParser
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Moteur TTS (VoxCPM2 ou espeak-ng en fallback)
+# Moteur TTS — 3 niveaux : XTTS v2 → VoxCPM2 → espeak-ng
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TTSBackend:
+    """
+    Priorité :
+      1. Coqui XTTS v2  — clonage vocal réel, FR+AR, CPU/GPU
+      2. VoxCPM2        — voice design + clonage, GPU requis
+      3. espeak-ng      — fallback hors-ligne (qualité limitée)
+    """
+
+    XTTS_LANGS  = {"fr": "fr", "ar": "ar"}
+    ESPEAK_LANG = {"fr": "fr", "ar": "ar"}
+
     def __init__(self):
-        self.engine = None
-        self.vox_model = None
-        self.asr_model = None
+        self.engine      = None
+        self.xtts        = None
+        self.vox_model   = None
         self.sample_rate = 24000
         self._init()
 
+    # ── Init ────────────────────────────────────────────────────────────────
+
     def _init(self):
+        # Niveau 1 : Coqui XTTS v2
         try:
-            import voxcpm
-            import torch
-            logger.info("Chargement de VoxCPM2…")
-            self.vox_model = voxcpm.VoxCPM.from_pretrained("openbmb/VoxCPM2", optimize=True)
-            self.sample_rate = self.vox_model.tts_model.sample_rate
-            self.engine = "voxcpm"
-            logger.info(f"✓ VoxCPM2 prêt (sample_rate={self.sample_rate})")
-
-            # ASR optionnel pour la transcription automatique
-            try:
-                from funasr import AutoModel
-                import torch
-                device = "cuda:0" if torch.cuda.is_available() else "cpu"
-                self.asr_model = AutoModel(
-                    model="iic/SenseVoiceSmall",
-                    disable_update=True,
-                    log_level="ERROR",
-                    device=device,
-                )
-                logger.info("✓ ASR (SenseVoiceSmall) prêt")
-            except Exception as e:
-                logger.warning(f"ASR non disponible: {e}")
-
+            self._load_xtts()
+            self.engine = "xtts"
+            logger.info("✓ XTTS v2 prêt — clonage vocal activé")
+            return
         except Exception as e:
-            logger.warning(f"VoxCPM2 non disponible ({e}) — utilisation de espeak-ng")
-            if not shutil.which("espeak-ng"):
-                raise RuntimeError(
-                    "Ni VoxCPM2 ni espeak-ng trouvés.\n"
-                    "Installez espeak-ng : https://github.com/espeak-ng/espeak-ng/releases"
-                )
-            self.engine = "espeak"
+            logger.warning(f"XTTS v2 non disponible : {e}")
+
+        # Niveau 2 : VoxCPM2
+        try:
+            self._load_voxcpm()
+            self.engine = "voxcpm"
+            logger.info("✓ VoxCPM2 prêt")
+            return
+        except Exception as e:
+            logger.warning(f"VoxCPM2 non disponible : {e}")
+
+        # Niveau 3 : espeak-ng
+        if shutil.which("espeak-ng"):
+            self.engine      = "espeak"
             self.sample_rate = 22050
             logger.info("✓ espeak-ng prêt (mode hors-ligne)")
+        else:
+            raise RuntimeError(
+                "Aucun moteur TTS disponible.\n"
+                "Installez espeak-ng : https://github.com/espeak-ng/espeak-ng/releases"
+            )
 
-    # ── Génération ────────────────────────────────────────────────────────────
+    def _load_xtts(self):
+        from TTS.api import TTS
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Chargement XTTS v2 sur {device}…")
+        self.xtts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+        self.sample_rate = 24000
+
+    def _load_voxcpm(self):
+        import voxcpm, torch
+        self.vox_model   = voxcpm.VoxCPM.from_pretrained("openbmb/VoxCPM2", optimize=True)
+        self.sample_rate = self.vox_model.tts_model.sample_rate
+
+    # ── Génération principale ───────────────────────────────────────────────
 
     def generate(
         self,
         text: str,
-        control_instruction: str = "",
-        reference_wav_path: Optional[str] = None,
-        use_ultimate_cloning: bool = False,
-        prompt_text: str = "",
-        cfg_value: float = 2.0,
-        dit_steps: int = 10,
-        do_normalize: bool = False,
-        denoise: bool = False,
         language: str = "fr",
+        speaker_wav: Optional[str] = None,
+        control: str = "",
+        cfg: float = 2.0,
+        steps: int = 10,
     ) -> Tuple[int, np.ndarray]:
         text = (text or "").strip()
         if not text:
             raise ValueError("Le texte est vide.")
 
+        if self.engine == "xtts":
+            return self._gen_xtts(text, language, speaker_wav)
         if self.engine == "voxcpm":
-            return self._generate_voxcpm(
-                text, control_instruction, reference_wav_path,
-                use_ultimate_cloning, prompt_text,
-                cfg_value, dit_steps, do_normalize, denoise,
-            )
-        return self._generate_espeak(text, language)
+            return self._gen_voxcpm(text, control, speaker_wav, cfg, steps)
+        return self._gen_espeak(text, language)
 
-    def _generate_voxcpm(
+    # ── XTTS v2 ─────────────────────────────────────────────────────────────
+
+    def _gen_xtts(
         self,
-        text, control, ref_wav, use_ultimate, prompt_text,
-        cfg, steps, normalize, denoise,
+        text: str,
+        language: str,
+        speaker_wav: Optional[str],
     ) -> Tuple[int, np.ndarray]:
-        control = (control or "").strip()
-        final_text = f"({control}){text}" if control and not use_ultimate else text
+        lang = self.XTTS_LANGS.get(language, "fr")
 
-        kwargs = dict(
-            text=final_text,
-            cfg_value=float(cfg),
-            inference_timesteps=int(steps),
-            normalize=normalize,
-            denoise=denoise,
-        )
-        if ref_wav:
+        if speaker_wav and Path(speaker_wav).exists():
+            # Clonage vocal avec l'audio de référence
+            wav = self.xtts.tts(text=text, speaker_wav=speaker_wav, language=lang)
+        else:
+            # Voix par défaut XTTS (première voix disponible)
+            speakers = self.xtts.speakers or []
+            if speakers:
+                wav = self.xtts.tts(text=text, speaker=speakers[0], language=lang)
+            else:
+                # modèle sans liste de speakers — utilise une voix interne
+                wav = self.xtts.tts(text=text, language=lang)
+
+        wav_np = np.array(wav, dtype=np.float32)
+        # Normaliser pour éviter le clipping
+        peak = np.abs(wav_np).max()
+        if peak > 0:
+            wav_np = wav_np / peak * 0.95
+        return (self.sample_rate, wav_np)
+
+    # ── VoxCPM2 ─────────────────────────────────────────────────────────────
+
+    def _gen_voxcpm(
+        self,
+        text: str,
+        control: str,
+        ref_wav: Optional[str],
+        cfg: float,
+        steps: int,
+    ) -> Tuple[int, np.ndarray]:
+        control  = (control or "").strip()
+        full_txt = f"({control}){text}" if control else text
+        kwargs   = dict(text=full_txt, cfg_value=float(cfg), inference_timesteps=int(steps))
+        if ref_wav and Path(ref_wav).exists():
             kwargs["reference_wav_path"] = ref_wav
-        if use_ultimate and ref_wav and prompt_text.strip():
-            kwargs["prompt_wav_path"] = ref_wav
-            kwargs["prompt_text"] = prompt_text.strip()
-
         wav = self.vox_model.generate(**kwargs)
         return (self.sample_rate, wav)
 
-    def _generate_espeak(self, text: str, language: str) -> Tuple[int, np.ndarray]:
+    # ── espeak-ng ────────────────────────────────────────────────────────────
+
+    def _gen_espeak(self, text: str, language: str) -> Tuple[int, np.ndarray]:
         import soundfile as sf
-        voices = {"fr": "fr", "ar": "ar"}
-        voice = voices.get(language, "fr")
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp = f.name
+        voice = self.ESPEAK_LANG.get(language, "fr")
+        tmp   = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
         try:
             subprocess.run(
                 ["espeak-ng", "-v", voice, "-w", tmp, text],
@@ -138,397 +170,294 @@ class TTSBackend:
             Path(tmp).unlink(missing_ok=True)
         return (sr, wav.astype(np.float32))
 
-    # ── ASR ───────────────────────────────────────────────────────────────────
-
-    def transcribe(self, audio_path: str) -> str:
-        if not audio_path or not self.asr_model:
-            return ""
-        try:
-            res = self.asr_model.generate(input=audio_path, language="auto", use_itn=True)
-            return res[0]["text"].split("|>")[-1]
-        except Exception as e:
-            logger.warning(f"ASR échoué: {e}")
-            return ""
+    # ── Propriétés ───────────────────────────────────────────────────────────
 
     @property
-    def supports_cloning(self):
-        return self.engine == "voxcpm"
+    def supports_cloning(self) -> bool:
+        return self.engine in ("xtts", "voxcpm")
 
     @property
-    def supports_asr(self):
-        return self.asr_model is not None
+    def engine_label(self) -> str:
+        return {
+            "xtts":   "🟢 XTTS v2 — Clonage vocal actif",
+            "voxcpm": "🟢 VoxCPM2 — Clonage vocal actif",
+            "espeak": "🟡 espeak-ng — Mode hors-ligne (qualité limitée)",
+        }.get(self.engine, self.engine)
+
+    @property
+    def xtts_speakers(self) -> list:
+        if self.engine == "xtts" and self.xtts and self.xtts.speakers:
+            return self.xtts.speakers
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CSS & Thème
+# Interface Gradio
 # ═══════════════════════════════════════════════════════════════════════════════
-
-CUSTOM_CSS = """
-.logo-container { text-align:center; margin:0.5rem 0 1rem 0; }
-.logo-container img { height:72px; width:auto; display:inline-block; }
-.engine-badge {
-    display:inline-flex; align-items:center; gap:6px;
-    background:#1e2030; border:1px solid #3d4166;
-    border-radius:20px; padding:4px 14px;
-    font-size:.82rem; color:#9099c4;
-}
-.engine-dot { width:8px; height:8px; border-radius:50%; display:inline-block; }
-.dot-green { background:#22c55e; box-shadow:0 0 6px #22c55e; }
-.dot-yellow { background:#f59e0b; box-shadow:0 0 6px #f59e0b; }
-.switch-toggle input[type=checkbox] {
-    appearance:none; width:44px; height:24px;
-    background:#555; border-radius:12px; position:relative; cursor:pointer; transition:.3s;
-}
-.switch-toggle input[type=checkbox]::after {
-    content:""; position:absolute; top:2px; left:2px;
-    width:20px; height:20px; background:#fff; border-radius:50%;
-    transition:.3s; box-shadow:0 1px 3px rgba(0,0,0,.3);
-}
-.switch-toggle input[type=checkbox]:checked { background:var(--color-accent); }
-.switch-toggle input[type=checkbox]:checked::after { transform:translateX(20px); }
-"""
 
 THEME = gr.themes.Soft(
-    primary_hue="blue",
-    secondary_hue="gray",
-    neutral_hue="slate",
-    font=[gr.themes.GoogleFont("Inter"), "Arial", "sans-serif"],
+    primary_hue="violet",
+    secondary_hue="slate",
+    font=[gr.themes.GoogleFont("Inter"), "sans-serif"],
 )
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Construction de l'interface
-# ═══════════════════════════════════════════════════════════════════════════════
+CSS = """
+.engine-pill {
+    display:inline-block; padding:4px 16px;
+    border-radius:20px; font-size:.82rem; font-weight:600;
+    background:#1e2030; border:1px solid #3d4166; color:#9099c4;
+    margin-bottom:8px;
+}
+.clone-tip { background:rgba(108,99,255,.08); border-left:3px solid #6c63ff;
+             padding:10px 14px; border-radius:0 8px 8px 0; font-size:.85rem; margin-top:8px; }
+footer { display:none !important; }
+"""
 
-def build_app(backend: TTSBackend) -> gr.Blocks:
-    parser = BookParser()
+def build_ui(backend: TTSBackend) -> gr.Blocks:
+    parser   = BookParser()
     book_data = {"chapters": [], "flat": []}
 
-    engine_html = (
-        f'<div class="engine-badge">'
-        f'<span class="engine-dot {"dot-green" if backend.engine == "voxcpm" else "dot-yellow"}"></span>'
-        f'{"🤖 VoxCPM2 — Clonage vocal actif" if backend.engine == "voxcpm" else "🔊 espeak-ng — Mode hors-ligne (installez VoxCPM2 pour le clonage)"}'
-        f'</div>'
-    )
+    # ── helpers ─────────────────────────────────────────────────────────────
 
-    cloning_note = (
-        "" if backend.supports_cloning else
-        "> ⚠️ **VoxCPM2 non installé** — Le clonage vocal et la Voice Design ne sont pas disponibles. "
-        "Seule la synthèse espeak-ng (hors-ligne) est active.\n\n"
-        "> **Installer VoxCPM2 :** `pip install voxcpm torch torchaudio --index-url https://download.pytorch.org/whl/cu121` (GPU requis)"
-    )
+    def _safe_gen(text, lang, speaker_wav, control="", cfg=2.0, steps=10):
+        try:
+            return backend.generate(text, lang, speaker_wav, control, cfg, steps), gr.update(visible=False)
+        except Exception as e:
+            return None, gr.update(value=f"❌ {e}", visible=True)
 
-    with gr.Blocks(title="AudioVox — VoxCPM2") as demo:
+    # ════════════════════════════════════════════════════════════════════════
+    with gr.Blocks(theme=THEME, css=CSS, title="AudioVox") as demo:
 
-        # Logo
-        gr.HTML(
-            '<div class="logo-container">'
-            '<img src="/gradio_api/file=assets/voxcpm_logo.png" alt="VoxCPM2" '
-            'onerror="this.style.display=\'none\'">'
-            '</div>'
-        )
-        gr.HTML(engine_html)
-        if cloning_note:
-            gr.Markdown(cloning_note)
+        gr.HTML(f"""
+        <div style="text-align:center;padding:16px 0 8px">
+          <h1 style="font-size:1.8rem;font-weight:800;margin:0">🎧 AudioVox</h1>
+          <p style="color:#888;margin:4px 0 10px">Lecteur de livres audio — Français & Arabe</p>
+          <span class="engine-pill">{backend.engine_label}</span>
+        </div>
+        """)
 
         with gr.Tabs():
 
-            # ══ Onglet 1 : Synthèse vocale ═══════════════════════════════════
-            with gr.Tab("🎤 Synthèse vocale"):
-                gr.Markdown("""
-**VoxCPM2 — Trois modes :**
-🎨 **Voice Design** — Décrivez la voix dans le champ *Instruction de contrôle*, sans audio de référence.
-🎛️ **Clonage contrôlable** — Importez un audio + guidez le style via l'instruction.
-🎙️ **Clonage ultime** — Activez le mode + entrez la transcription pour reproduire chaque nuance.
-                """)
+            # ══════════════════════════════════════════════════════════════════
+            # Onglet 1 — Clonage & Synthèse vocale
+            # ══════════════════════════════════════════════════════════════════
+            with gr.Tab("🎤 Synthèse & Clonage vocal"):
+
+                if not backend.supports_cloning:
+                    gr.Markdown("""
+> ⚠️ **XTTS v2 / VoxCPM2 non trouvé** — seul espeak-ng est actif.
+> Pour activer le clonage : `pip install TTS` puis relancez l'app.
+                    """)
 
                 with gr.Row():
+                    # ── Colonne gauche ──────────────────────────────────────
                     with gr.Column(scale=1):
+                        gr.Markdown("### 🎤 Votre voix")
                         ref_audio = gr.Audio(
-                            sources=["upload", "microphone"],
+                            sources=["microphone", "upload"],
                             type="filepath",
-                            label="🎤 Audio de référence (optionnel — pour le clonage)",
+                            label="Enregistrez ou importez votre voix (6–30 secondes)",
                         )
-                        ultimate_mode = gr.Checkbox(
-                            value=False,
-                            label="🎙️ Mode Clonage Ultime (clonage guidé par transcription)",
-                            info="Auto-transcrit l'audio de référence pour reproduire chaque nuance vocale. Désactive l'instruction de contrôle.",
-                            elem_classes=["switch-toggle"],
-                            interactive=backend.supports_cloning,
+                        gr.HTML("""<div class="clone-tip">
+💡 <b>Conseil clonage :</b> Lisez un texte normal à voix haute pendant 10–30 secondes.
+Plus l'enregistrement est long et clair, meilleur sera le clone.
+</div>""")
+
+                        gr.Markdown("### ✍️ Texte à synthétiser")
+                        tts_text = gr.Textbox(
+                            label="Texte",
+                            placeholder="Entrez le texte à lire…",
+                            lines=5,
+                            value="Bonjour, ceci est un test de synthèse vocale avec clonage.",
                         )
-                        prompt_text_box = gr.Textbox(
-                            label="Transcription de l'audio de référence (auto-remplie, modifiable)",
-                            placeholder="La transcription de votre audio apparaîtra ici…",
-                            lines=2,
-                            visible=False,
-                        )
-                        control_box = gr.Textbox(
-                            label="🎛️ Instruction de contrôle (optionnel)",
-                            placeholder="Ex : Jeune femme douce et chaleureuse / صوت شاب هادئ / Excited fast pace",
-                            lines=2,
-                            interactive=backend.supports_cloning,
-                        )
-                        target_text = gr.Textbox(
-                            label="✍️ Texte à synthétiser",
-                            value="VoxCPM2 est un modèle de synthèse vocale multilingue haute qualité.",
-                            lines=4,
-                        )
-                        lang_tts = gr.Radio(
-                            choices=[("🇫🇷 Français", "fr"), ("🇸🇦 Arabe", "ar"), ("🌍 Autre", "auto")],
+                        tts_lang = gr.Radio(
+                            choices=[("🇫🇷 Français", "fr"), ("🇸🇦 Arabe", "ar")],
                             value="fr",
-                            label="Langue (pour espeak-ng uniquement)",
-                            visible=not backend.supports_cloning,
+                            label="Langue",
+                        )
+
+                        # Instruction VoxCPM (visible seulement si voxcpm actif)
+                        vox_ctrl = gr.Textbox(
+                            label="🎛️ Instruction de style (VoxCPM2 uniquement)",
+                            placeholder="Ex: Voix douce et lente / صوت هادئ",
+                            lines=2,
+                            visible=(backend.engine == "voxcpm"),
                         )
 
                         with gr.Accordion("⚙️ Paramètres avancés", open=False):
-                            denoise_chk = gr.Checkbox(
-                                value=False, label="Débruitage de l'audio de référence",
-                                elem_classes=["switch-toggle"],
-                                interactive=backend.supports_cloning,
-                            )
-                            normalize_chk = gr.Checkbox(
-                                value=False, label="Normalisation du texte",
-                                elem_classes=["switch-toggle"],
-                                interactive=backend.supports_cloning,
-                            )
-                            cfg_slider = gr.Slider(1.0, 3.0, value=2.0, step=0.1,
-                                label="CFG (force de guidage)",
-                                info="Plus élevé → plus fidèle à la référence",
-                                interactive=backend.supports_cloning,
-                            )
-                            steps_slider = gr.Slider(1, 50, value=10, step=1,
-                                label="Étapes de diffusion",
-                                info="Plus d'étapes → meilleure qualité, plus lent",
-                                interactive=backend.supports_cloning,
-                            )
+                            cfg_sl   = gr.Slider(1.0, 3.0, value=2.0, step=0.1,
+                                                 label="CFG — force du guidage",
+                                                 interactive=(backend.engine == "voxcpm"))
+                            steps_sl = gr.Slider(1, 50, value=10, step=1,
+                                                 label="Étapes de diffusion",
+                                                 interactive=(backend.engine == "voxcpm"))
 
-                        gen_btn = gr.Button("🔊 Générer la voix", variant="primary", size="lg")
+                        gen_btn = gr.Button("🔊 Générer", variant="primary", size="lg")
 
+                    # ── Colonne droite ──────────────────────────────────────
                     with gr.Column(scale=1):
-                        audio_out = gr.Audio(label="🎧 Audio généré", type="numpy")
-                        gr.Markdown("""
----
-**💡 Exemples d'instructions de contrôle :**
+                        gr.Markdown("### 🎧 Résultat")
+                        audio_out = gr.Audio(label="Audio généré", type="numpy")
+                        err_box   = gr.Markdown("", visible=False)
 
-**Voice Design français :**
-`Voix de femme mature, chaleureuse et posée, débit lent et rassurant`
+                        gr.Markdown("""---
+**Modes disponibles selon le moteur :**
 
-**Voice Design arabe :**
-`صوت رجل عربي هادئ، نبرة رسمية، لغة فصحى واضحة`
+| | XTTS v2 | VoxCPM2 | espeak-ng |
+|---|---|---|---|
+| Synthèse FR/AR | ✅ | ✅ | ✅ |
+| Clonage vocal | ✅ | ✅ | ❌ |
+| Qualité audio | ⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐ |
+| GPU requis | Non | Oui | Non |
 
-**Style + clonage :**
-`Slightly faster, cheerful and energetic`
+**Installer XTTS v2 (recommandé) :**
+```
+pip install TTS
+```
+**Installer VoxCPM2 (meilleure qualité, GPU) :**
+```
+pip install voxcpm torch
+```
                         """)
 
-                # Events
-                def on_ultimate_toggle(checked, audio_path):
-                    transcript = ""
-                    if checked and audio_path and backend.supports_asr:
-                        transcript = backend.transcribe(audio_path)
-                    return (
-                        gr.update(visible=checked, value=transcript),
-                        gr.update(visible=not checked),
-                    )
-
-                ultimate_mode.change(
-                    fn=on_ultimate_toggle,
-                    inputs=[ultimate_mode, ref_audio],
-                    outputs=[prompt_text_box, control_box],
-                )
-
-                def generate_speech(text, control, ref_wav, use_ult, prompt_t, lang,
-                                    cfg, steps, norm, den):
-                    try:
-                        sr, wav = backend.generate(
-                            text=text,
-                            control_instruction=control,
-                            reference_wav_path=ref_wav,
-                            use_ultimate_cloning=use_ult,
-                            prompt_text=prompt_t,
-                            cfg_value=cfg,
-                            dit_steps=steps,
-                            do_normalize=norm,
-                            denoise=den,
-                            language=lang,
-                        )
-                        return (sr, wav), None
-                    except Exception as e:
-                        return None, gr.Warning(str(e))
-
                 gen_btn.click(
-                    fn=generate_speech,
-                    inputs=[target_text, control_box, ref_audio, ultimate_mode,
-                            prompt_text_box, lang_tts, cfg_slider, steps_slider,
-                            normalize_chk, denoise_chk],
-                    outputs=[audio_out],
+                    fn=lambda txt, lang, wav, ctrl, cfg, steps: _safe_gen(txt, lang, wav, ctrl, cfg, steps),
+                    inputs=[tts_text, tts_lang, ref_audio, vox_ctrl, cfg_sl, steps_sl],
+                    outputs=[audio_out, err_box],
                 )
 
-            # ══ Onglet 2 : Lecture de livre ═══════════════════════════════════
+            # ══════════════════════════════════════════════════════════════════
+            # Onglet 2 — Lecture de livre
+            # ══════════════════════════════════════════════════════════════════
             with gr.Tab("📚 Lecture de livre"):
-                gr.Markdown("### Chargez un livre et faites-le lire avec votre voix clonée")
-
                 with gr.Row():
+                    # ── Panneau gauche ──────────────────────────────────────
                     with gr.Column(scale=1):
-                        book_upload = gr.File(
-                            label="📁 Importer un livre",
+                        gr.Markdown("### 📁 Importer un livre")
+                        book_file = gr.File(
+                            label="Glissez un fichier ici",
                             file_types=[".txt", ".pdf", ".epub", ".docx", ".doc"],
                         )
-                        lang_book = gr.Radio(
-                            choices=[("🇫🇷 Français", "fr"), ("🇸🇦 العربية", "ar")],
-                            value="fr",
-                            label="Langue du livre",
+                        book_btn  = gr.Button("📖 Charger", variant="secondary")
+                        book_info = gr.Markdown("*Aucun livre chargé*")
+
+                        gr.Markdown("### ⚙️ Options de lecture")
+                        book_lang = gr.Radio(
+                            choices=[("🇫🇷 Français", "fr"), ("🇸🇦 Arabe", "ar")],
+                            value="fr", label="Langue du livre",
                         )
-                        ref_audio_book = gr.Audio(
-                            sources=["upload", "microphone"],
+                        book_voice = gr.Audio(
+                            sources=["microphone", "upload"],
                             type="filepath",
                             label="🎤 Votre voix (optionnel — pour cloner votre timbre)",
                         )
-                        book_load_btn = gr.Button("📖 Charger le livre", variant="secondary")
-                        book_status = gr.Markdown("*Aucun livre chargé*")
-                        chapter_dd = gr.Dropdown(choices=[], label="📑 Chapitre", interactive=True)
-                        para_dd    = gr.Dropdown(choices=[], label="§ Paragraphe", interactive=True)
 
+                        chapter_dd = gr.Dropdown(label="📑 Chapitre", choices=[], interactive=True)
+                        para_dd    = gr.Dropdown(label="§ Paragraphe", choices=[], interactive=True)
+
+                    # ── Panneau droit ───────────────────────────────────────
                     with gr.Column(scale=2):
-                        para_text = gr.Textbox(
-                            label="Texte du paragraphe sélectionné",
-                            lines=8,
+                        para_box = gr.Textbox(
+                            label="Texte du paragraphe",
+                            lines=10,
                             interactive=True,
                         )
                         with gr.Row():
-                            read_para_btn = gr.Button("▶ Lire ce paragraphe", variant="primary")
-                            read_all_btn  = gr.Button("📖 Lire tout le chapitre", variant="secondary")
-                        book_audio_out = gr.Audio(label="🎧 Audio", type="numpy")
-                        book_progress  = gr.Markdown("")
+                            read_para = gr.Button("▶ Lire ce paragraphe", variant="primary")
+                            read_chap = gr.Button("📖 Lire tout le chapitre", variant="secondary")
+                        book_audio  = gr.Audio(label="🎧 Audio", type="numpy")
+                        book_status = gr.Markdown("")
 
-                # ── Logique livre ────────────────────────────────────────────
+                # ── Events livre ─────────────────────────────────────────────
 
-                def load_book(file):
-                    if file is None:
-                        return "*Aucun fichier*", gr.update(choices=[]), gr.update(choices=[]), "", []
+                def load_book(f):
+                    if f is None:
+                        return "*Aucun fichier*", gr.update(choices=[]), gr.update(choices=[]), ""
                     try:
-                        chapters = parser.parse(file.name)
+                        chapters = parser.parse(f.name)
                         book_data["chapters"] = chapters
-                        book_data["flat"] = [
-                            (ci, pi, p)
-                            for ci, ch in enumerate(chapters)
-                            for pi, p in enumerate(ch["paragraphs"])
-                        ]
-                        ch_choices = [f"Chapitre {i+1} — {ch['title'][:40]}" for i, ch in enumerate(chapters)]
-                        total = sum(len(c["paragraphs"]) for c in chapters)
-                        status = f"✅ **{Path(file.name).name}** — {len(chapters)} chapitre(s), {total} paragraphe(s)"
-                        return status, gr.update(choices=ch_choices, value=ch_choices[0] if ch_choices else None), gr.update(choices=[]), ""
+                        ch_list = [f"Chapitre {i+1} — {ch['title'][:45]}" for i, ch in enumerate(chapters)]
+                        total   = sum(len(c["paragraphs"]) for c in chapters)
+                        info    = f"✅ **{Path(f.name).name}** — {len(chapters)} chapitre(s) · {total} paragraphe(s)"
+                        return (info,
+                                gr.update(choices=ch_list, value=ch_list[0] if ch_list else None),
+                                gr.update(choices=[]),
+                                "")
                     except Exception as e:
-                        return f"❌ Erreur : {e}", gr.update(choices=[]), gr.update(choices=[]), ""
+                        return f"❌ {e}", gr.update(choices=[]), gr.update(choices=[]), ""
 
-                def on_chapter_change(ch_label):
-                    if not ch_label or not book_data["chapters"]:
+                def on_chapter(ch_lbl):
+                    if not ch_lbl or not book_data["chapters"]:
                         return gr.update(choices=[]), ""
-                    idx = next((i for i, ch in enumerate(book_data["chapters"])
-                                if ch_label.startswith(f"Chapitre {i+1}")), 0)
+                    idx   = next((i for i, ch in enumerate(book_data["chapters"])
+                                  if ch_lbl.startswith(f"Chapitre {i+1}")), 0)
                     paras = book_data["chapters"][idx]["paragraphs"]
-                    choices = [f"§{j+1} — {p[:60]}…" if len(p) > 60 else f"§{j+1} — {p}" for j, p in enumerate(paras)]
-                    return gr.update(choices=choices, value=choices[0] if choices else None), paras[0] if paras else ""
+                    opts  = [f"§{j+1} — {p[:55]}…" if len(p) > 55 else f"§{j+1} — {p}"
+                             for j, p in enumerate(paras)]
+                    return gr.update(choices=opts, value=opts[0] if opts else None), paras[0] if paras else ""
 
-                def on_para_change(ch_label, para_label):
-                    if not ch_label or not para_label or not book_data["chapters"]:
+                def on_para(ch_lbl, p_lbl):
+                    if not ch_lbl or not p_lbl or not book_data["chapters"]:
                         return ""
-                    ci = next((i for i, ch in enumerate(book_data["chapters"])
-                               if ch_label.startswith(f"Chapitre {i+1}")), 0)
-                    pi = int(para_label.split("§")[1].split(" ")[0]) - 1 if para_label else 0
+                    ci    = next((i for i, ch in enumerate(book_data["chapters"])
+                                  if ch_lbl.startswith(f"Chapitre {i+1}")), 0)
+                    pi    = int(p_lbl.split("§")[1].split(" ")[0]) - 1
                     paras = book_data["chapters"][ci]["paragraphs"]
                     return paras[pi] if 0 <= pi < len(paras) else ""
 
-                def read_paragraph(text, ref_wav, lang, cfg=2.0, steps=10):
+                def read_para_fn(text, lang, voice):
                     if not text.strip():
                         return None, "⚠️ Paragraphe vide."
                     try:
-                        sr, wav = backend.generate(
-                            text=text, reference_wav_path=ref_wav,
-                            language=lang, cfg_value=cfg, dit_steps=steps,
-                        )
-                        return (sr, wav), ""
+                        return backend.generate(text, lang, voice), ""
                     except Exception as e:
                         return None, f"❌ {e}"
 
-                def read_chapter(ch_label, ref_wav, lang):
-                    if not ch_label or not book_data["chapters"]:
+                def read_chap_fn(ch_lbl, lang, voice):
+                    if not ch_lbl or not book_data["chapters"]:
                         return None, "⚠️ Aucun chapitre sélectionné."
-                    ci = next((i for i, ch in enumerate(book_data["chapters"])
-                               if ch_label.startswith(f"Chapitre {i+1}")), 0)
+                    ci    = next((i for i, ch in enumerate(book_data["chapters"])
+                                  if ch_lbl.startswith(f"Chapitre {i+1}")), 0)
                     paras = book_data["chapters"][ci]["paragraphs"]
-                    if not paras:
-                        return None, "Chapitre vide."
-                    all_text = " ".join(paras)
-                    return read_paragraph(all_text, ref_wav, lang)
+                    full  = " ".join(paras)
+                    return read_para_fn(full, lang, voice)
 
-                book_load_btn.click(
-                    fn=load_book,
-                    inputs=[book_upload],
-                    outputs=[book_status, chapter_dd, para_dd, para_text],
-                )
-                chapter_dd.change(
-                    fn=on_chapter_change,
-                    inputs=[chapter_dd],
-                    outputs=[para_dd, para_text],
-                )
-                para_dd.change(
-                    fn=on_para_change,
-                    inputs=[chapter_dd, para_dd],
-                    outputs=[para_text],
-                )
-                read_para_btn.click(
-                    fn=read_paragraph,
-                    inputs=[para_text, ref_audio_book, lang_book],
-                    outputs=[book_audio_out, book_progress],
-                )
-                read_all_btn.click(
-                    fn=read_chapter,
-                    inputs=[chapter_dd, ref_audio_book, lang_book],
-                    outputs=[book_audio_out, book_progress],
-                )
+                book_btn.click(load_book, [book_file], [book_info, chapter_dd, para_dd, para_box])
+                chapter_dd.change(on_chapter, [chapter_dd], [para_dd, para_box])
+                para_dd.change(on_para, [chapter_dd, para_dd], [para_box])
+                read_para.click(read_para_fn, [para_box, book_lang, book_voice], [book_audio, book_status])
+                read_chap.click(read_chap_fn, [chapter_dd, book_lang, book_voice], [book_audio, book_status])
 
-            # ══ Onglet 3 : Texte libre ════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════════
+            # Onglet 3 — Texte libre
+            # ══════════════════════════════════════════════════════════════════
             with gr.Tab("✏️ Texte libre"):
-                gr.Markdown("### Entrez ou collez n'importe quel texte")
                 with gr.Row():
                     with gr.Column(scale=2):
-                        free_text = gr.Textbox(
-                            label="Texte à lire",
-                            placeholder="Collez votre texte ici — toute taille acceptée…",
-                            lines=12,
+                        free_txt  = gr.Textbox(
+                            label="Votre texte (toute taille)",
+                            placeholder="Collez ou tapez votre texte ici…",
+                            lines=14,
                         )
-                        lang_free = gr.Radio(
+                        free_lang = gr.Radio(
                             choices=[("🇫🇷 Français", "fr"), ("🇸🇦 Arabe", "ar")],
                             value="fr", label="Langue",
                         )
+                        free_btn  = gr.Button("🔊 Lire ce texte", variant="primary", size="lg")
+
                     with gr.Column(scale=1):
-                        ref_audio_free = gr.Audio(
-                            sources=["upload", "microphone"],
+                        free_voice = gr.Audio(
+                            sources=["microphone", "upload"],
                             type="filepath",
                             label="🎤 Votre voix (optionnel)",
                         )
-                        ctrl_free = gr.Textbox(
-                            label="🎛️ Instruction de contrôle (optionnel)",
-                            placeholder="Ex : Voix posée et lente / Voice calme",
-                            lines=2,
-                            interactive=backend.supports_cloning,
-                        )
-                        read_free_btn = gr.Button("🔊 Lire ce texte", variant="primary", size="lg")
-                        free_audio_out = gr.Audio(label="🎧 Audio généré", type="numpy")
+                        free_audio = gr.Audio(label="🎧 Audio généré", type="numpy")
+                        free_err   = gr.Markdown("", visible=False)
 
-                def read_free(text, lang, ref_wav, ctrl):
-                    if not text.strip():
-                        return None
-                    _, wav = backend.generate(
-                        text=text, language=lang,
-                        reference_wav_path=ref_wav,
-                        control_instruction=ctrl,
-                    )
-                    return (backend.sample_rate, wav)
-
-                read_free_btn.click(
-                    fn=read_free,
-                    inputs=[free_text, lang_free, ref_audio_free, ctrl_free],
-                    outputs=[free_audio_out],
+                free_btn.click(
+                    fn=lambda txt, lang, wav: _safe_gen(txt, lang, wav),
+                    inputs=[free_txt, free_lang, free_voice],
+                    outputs=[free_audio, free_err],
                 )
 
     gr.set_static_paths(paths=[Path.cwd().absolute() / "assets"])
@@ -536,7 +465,7 @@ def build_app(backend: TTSBackend) -> gr.Blocks:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Point d'entrée
+# Lancement
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
@@ -546,16 +475,14 @@ if __name__ == "__main__":
     ap.add_argument("--host", type=str, default="0.0.0.0")
     args = ap.parse_args()
 
-    print("Initialisation du moteur TTS…")
+    print("\n=== AudioVox — Initialisation ===")
     backend = TTSBackend()
-    print(f"Moteur actif : {backend.engine}")
+    print(f"Moteur actif : {backend.engine_label}\n")
 
-    app = build_app(backend)
-    app.queue(max_size=5, default_concurrency_limit=1).launch(
+    ui = build_ui(backend)
+    ui.queue(max_size=5).launch(
         server_name=args.host,
         server_port=args.port,
         show_error=True,
         share=False,
-        theme=THEME,
-        css=CUSTOM_CSS,
     )

@@ -1,9 +1,11 @@
 # Web framework
+gradio>=4.0.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 
 # TTS engines
+TTS>=0.22.0                # Coqui XTTS v2 — real voice cloning (CPU/GPU)
 # espeak-ng must be installed at system level: sudo apt install espeak-ng
 # voxcpm>=0.1.0            # Uncomment for VoxCPM2 voice cloning (needs GPU)
 
@@ -17,6 +19,7 @@ lxml>=5.0.0
 
 # Audio
 soundfile>=0.12.1          # WAV write (used with VoxCPM2)
+numpy>=1.24.0
 
 # Optional — VoxCPM2 dependencies (GPU required)
 # torch>=2.5.0

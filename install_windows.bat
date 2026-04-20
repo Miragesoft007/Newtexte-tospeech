@@ -30,26 +30,45 @@ echo [OK] Environnement virtuel actif
 echo Mise a jour de pip...
 python -m pip install --upgrade pip -q
 
-:: ── Dependances Python ──────────────────────────
+:: ── Dependances de base ──────────────────────────
 echo.
-echo Installation des dependances Python...
+echo Installation des dependances de base...
 pip install -q gradio fastapi uvicorn python-multipart ^
-    pdfplumber PyPDF2 ebooklib beautifulsoup4 lxml soundfile python-docx
+    pdfplumber PyPDF2 ebooklib beautifulsoup4 lxml soundfile python-docx numpy
 
 if errorlevel 1 (
     echo [ERREUR] Echec installation des dependances
     pause & exit /b 1
 )
-echo [OK] Dependances installees
+echo [OK] Dependances de base installees
 
-:: ── espeak-ng ───────────────────────────────────
+:: ── Coqui XTTS v2 — Clonage vocal (recommande) ──
+echo.
+echo ══════════════════════════════════════════════
+echo   XTTS v2 — Clonage vocal reel (recommande)
+echo   Fonctionne sur CPU et GPU
+echo   Taille : ~1.8 GB (telechargement au 1er lancement)
+echo ══════════════════════════════════════════════
+set /p INSTALL_XTTS="Installer XTTS v2 pour le clonage vocal ? [O/n] "
+if /i not "%INSTALL_XTTS%"=="n" (
+    echo Installation de Coqui TTS (XTTS v2)...
+    pip install -q TTS
+    if not errorlevel 1 (
+        echo [OK] XTTS v2 installe ! Clonage vocal active.
+    ) else (
+        echo [WARN] Echec installation XTTS v2 - espeak-ng sera utilise.
+    )
+) else (
+    echo [INFO] XTTS v2 ignore. Vous pouvez l'installer plus tard : pip install TTS
+)
+
+:: ── espeak-ng (fallback hors-ligne) ──────────────
 espeak-ng --version >nul 2>&1
 if errorlevel 1 (
     echo.
-    echo [ATTENTION] espeak-ng non installe (TTS hors-ligne)
-    echo Telechargez : https://github.com/espeak-ng/espeak-ng/releases/latest
-    echo Fichier     : espeak-ng-X.XX-x64.msi
-    echo Apres installation, relancez ce script.
+    echo [INFO] espeak-ng non installe (fallback TTS hors-ligne)
+    echo        Telechargez : https://github.com/espeak-ng/espeak-ng/releases/latest
+    echo        Fichier     : espeak-ng-X.XX-x64.msi
     echo.
 ) else (
     for /f "tokens=*" %%v in ('espeak-ng --version 2^>^&1') do echo [OK] %%v
@@ -60,23 +79,19 @@ echo.
 nvidia-smi >nul 2>&1
 if not errorlevel 1 (
     echo GPU NVIDIA detecte !
-    set /p INSTALL_VOX="Installer VoxCPM2 pour le clonage vocal ? [O/n] "
-    if /i not "!INSTALL_VOX!"=="n" (
+    set /p INSTALL_VOX="Installer VoxCPM2 (meilleure qualite, GPU) ? [O/n] "
+    if /i not "%INSTALL_VOX%"=="n" (
         echo Installation de PyTorch + VoxCPM2...
         pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cu121
         pip install -q voxcpm funasr
         if not errorlevel 1 (
-            echo [OK] VoxCPM2 installe ! Le clonage vocal est active.
+            echo [OK] VoxCPM2 installe !
         ) else (
-            echo [WARN] Echec installation VoxCPM2 - espeak-ng sera utilise.
+            echo [WARN] Echec installation VoxCPM2.
         )
     )
 ) else (
-    echo.
-    echo [INFO] Pas de GPU NVIDIA detecte.
-    echo        espeak-ng sera utilise comme moteur TTS.
-    echo        Pour activer le clonage vocal, installez un GPU NVIDIA
-    echo        puis relancez ce script.
+    echo [INFO] Pas de GPU NVIDIA - VoxCPM2 ignore.
 )
 
 echo.
