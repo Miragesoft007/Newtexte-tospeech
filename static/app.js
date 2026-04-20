@@ -13,6 +13,7 @@ const state = {
   currentIdx: -1,
   audioCache: {},      // idx → audio_url
   recorder: null,
+  recStream: null,
   recInterval: null,
   recChunks: [],
   recSeconds: 0,
@@ -347,6 +348,7 @@ async function startRecording() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     state.recChunks = [];
     state.recSeconds = 0;
+    state.recStream = stream;
     state.recorder = new MediaRecorder(stream);
     state.recorder.ondataavailable = e => { if (e.data.size) state.recChunks.push(e.data); };
     state.recorder.onstop = finishRecording;
@@ -372,7 +374,8 @@ async function startRecording() {
 
 function stopRecording() {
   if (state.recorder && state.recorder.state !== 'inactive') state.recorder.stop();
-  state.recorder?.stream?.getTracks().forEach(t => t.stop());
+  state.recStream?.getTracks().forEach(t => t.stop());
+  state.recStream = null;
   clearInterval(state.recInterval);
   state.isRecording = false;
 
