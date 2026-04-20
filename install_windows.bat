@@ -4,83 +4,85 @@ title AudioVox — Installation Windows
 
 echo.
 echo ══════════════════════════════════════════════
-echo   AudioVox — Lecteur de livres FR/AR
-echo   Installation Windows
+echo   AudioVox — Installation Windows
 echo ══════════════════════════════════════════════
 echo.
 
-:: ── Vérifier Python ─────────────────────────────
+:: ── Python ──────────────────────────────────────
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERREUR] Python n'est pas installe !
-    echo.
-    echo Telechargez Python 3.11 ici :
-    echo https://www.python.org/downloads/
-    echo.
-    echo IMPORTANT : Cochez "Add Python to PATH" pendant l'installation !
-    pause
-    exit /b 1
+    echo [ERREUR] Python non installe !
+    echo Telechargez Python 3.11 : https://www.python.org/downloads/
+    echo IMPORTANT : Cochez "Add Python to PATH" !
+    pause & exit /b 1
 )
+for /f "tokens=2" %%v in ('python --version') do echo [OK] Python %%v detecte
 
-for /f "tokens=2" %%v in ('python --version') do set PYVER=%%v
-echo [OK] Python %PYVER% detecte
-
-:: ── Créer l'environnement virtuel ───────────────
+:: ── Environnement virtuel ────────────────────────
 if not exist ".venv" (
-    echo.
     echo Creation de l'environnement virtuel...
     python -m venv .venv
-    if errorlevel 1 (
-        echo [ERREUR] Impossible de creer le venv
-        pause
-        exit /b 1
-    )
-    echo [OK] Environnement virtuel cree
-) else (
-    echo [OK] Environnement virtuel existant
 )
-
-:: ── Activer le venv ─────────────────────────────
 call .venv\Scripts\activate.bat
+echo [OK] Environnement virtuel actif
 
-:: ── Mettre à jour pip ───────────────────────────
-echo.
+:: ── pip ────────────────────────────────────────
 echo Mise a jour de pip...
 python -m pip install --upgrade pip -q
 
-:: ── Installer les dépendances Python ────────────
+:: ── Dependances Python ──────────────────────────
 echo.
 echo Installation des dependances Python...
-pip install fastapi "uvicorn[standard]" python-multipart pdfplumber PyPDF2 ebooklib beautifulsoup4 lxml soundfile -q
+pip install -q gradio fastapi uvicorn python-multipart ^
+    pdfplumber PyPDF2 ebooklib beautifulsoup4 lxml soundfile python-docx
+
 if errorlevel 1 (
     echo [ERREUR] Echec installation des dependances
-    pause
-    exit /b 1
+    pause & exit /b 1
 )
-echo [OK] Dependances Python installees
+echo [OK] Dependances installees
 
-:: ── Vérifier espeak-ng ──────────────────────────
-echo.
+:: ── espeak-ng ───────────────────────────────────
 espeak-ng --version >nul 2>&1
 if errorlevel 1 (
-    echo [ATTENTION] espeak-ng n'est pas installe !
     echo.
-    echo Telechargez et installez espeak-ng :
-    echo https://github.com/espeak-ng/espeak-ng/releases/latest
+    echo [ATTENTION] espeak-ng non installe (TTS hors-ligne)
+    echo Telechargez : https://github.com/espeak-ng/espeak-ng/releases/latest
+    echo Fichier     : espeak-ng-X.XX-x64.msi
+    echo Apres installation, relancez ce script.
     echo.
-    echo Cherchez le fichier : espeak-ng-X.XX-x64.msi
-    echo Apres installation, RELANCEZ ce script.
-    echo.
-    pause
-    exit /b 1
 ) else (
     for /f "tokens=*" %%v in ('espeak-ng --version 2^>^&1') do echo [OK] %%v
 )
 
+:: ── VoxCPM2 (optionnel, GPU requis) ─────────────
+echo.
+nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    echo GPU NVIDIA detecte !
+    set /p INSTALL_VOX="Installer VoxCPM2 pour le clonage vocal ? [O/n] "
+    if /i not "!INSTALL_VOX!"=="n" (
+        echo Installation de PyTorch + VoxCPM2...
+        pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+        pip install -q voxcpm funasr
+        if not errorlevel 1 (
+            echo [OK] VoxCPM2 installe ! Le clonage vocal est active.
+        ) else (
+            echo [WARN] Echec installation VoxCPM2 - espeak-ng sera utilise.
+        )
+    )
+) else (
+    echo.
+    echo [INFO] Pas de GPU NVIDIA detecte.
+    echo        espeak-ng sera utilise comme moteur TTS.
+    echo        Pour activer le clonage vocal, installez un GPU NVIDIA
+    echo        puis relancez ce script.
+)
+
 echo.
 echo ══════════════════════════════════════════════
-echo   Installation terminee avec succes !
-echo   Lancez maintenant : start_windows.bat
+echo   Installation terminee !
+echo   Double-cliquez sur : start_windows.bat
 echo ══════════════════════════════════════════════
 echo.
 pause
