@@ -4,7 +4,7 @@ uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
 
 # TTS engines
-edge-tts>=6.1.10          # Fallback cloud TTS (French + Arabic Neural voices)
+# espeak-ng must be installed at system level: sudo apt install espeak-ng
 # voxcpm>=0.1.0            # Uncomment for VoxCPM2 voice cloning (needs GPU)
 
 # Book parsers

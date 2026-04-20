@@ -116,8 +116,8 @@ async def engine_info():
         "supports_cloning": tts.supports_cloning,
         "languages": ["fr", "ar"],
         "voices": {
-            "fr": "fr-FR-DeniseNeural" if tts.engine == "edge-tts" else "VoxCPM2",
-            "ar": "ar-SA-ZariyahNeural" if tts.engine == "edge-tts" else "VoxCPM2",
+            "fr": {"voxcpm": "VoxCPM2", "edge-tts": "fr-FR-DeniseNeural", "espeak": "espeak-ng fr"}.get(tts.engine, tts.engine),
+            "ar": {"voxcpm": "VoxCPM2", "edge-tts": "ar-SA-ZariyahNeural", "espeak": "espeak-ng ar"}.get(tts.engine, tts.engine),
         },
     }
 

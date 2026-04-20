@@ -18,28 +18,30 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 
-echo "→ Installation des dépendances…"
+echo "→ Installation de espeak-ng (moteur TTS hors-ligne)…"
+if command -v apt-get &>/dev/null; then
+  apt-get install -y espeak-ng espeak-ng-data 2>/dev/null || sudo apt-get install -y espeak-ng espeak-ng-data
+  echo "✓ espeak-ng installé"
+elif command -v brew &>/dev/null; then
+  brew install espeak
+  echo "✓ espeak installé (macOS)"
+else
+  echo "⚠  Installez espeak-ng manuellement depuis https://github.com/espeak-ng/espeak-ng"
+fi
+
+echo "→ Installation des dépendances Python…"
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 
-# Optional: VoxCPM2 (GPU required)
+# Optional: VoxCPM2 (GPU required, voice cloning)
 if command -v nvidia-smi &>/dev/null; then
   echo ""
   read -rp "GPU détecté. Installer VoxCPM2 pour le clonage vocal ? [o/N] " ans
   if [[ "$ans" =~ ^[Oo]$ ]]; then
     pip install -q torch torchaudio --index-url https://download.pytorch.org/whl/cu121
     pip install -q voxcpm
-    sed -i 's/# voxcpm/voxcpm/' requirements.txt
     echo "✓ VoxCPM2 installé"
   fi
-fi
-
-# ffmpeg check (needed for audio conversion)
-if ! command -v ffmpeg &>/dev/null; then
-  echo ""
-  echo "⚠  ffmpeg non trouvé — recommandé pour la conversion audio."
-  echo "   Ubuntu/Debian : sudo apt install ffmpeg"
-  echo "   macOS         : brew install ffmpeg"
 fi
 
 echo ""
