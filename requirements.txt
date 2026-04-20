@@ -8,6 +8,7 @@ python-multipart>=0.0.9
 # voxcpm>=0.1.0            # Uncomment for VoxCPM2 voice cloning (needs GPU)
 
 # Book parsers
+python-docx>=1.1.0         # Word DOCX support
 pdfplumber>=0.10.0         # PDF text extraction
 PyPDF2>=3.0.0              # PDF fallback
 ebooklib>=0.18             # EPUB support

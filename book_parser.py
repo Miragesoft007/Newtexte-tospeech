@@ -11,6 +11,8 @@ class BookParser:
             return self._parse_pdf(file_path)
         if ext == ".epub":
             return self._parse_epub(file_path)
+        if ext in (".docx", ".doc"):
+            return self._parse_docx(file_path)
         raise ValueError(f"Format non supporté: {ext}")
 
     def _split_into_chapters(self, paragraphs: List[str], size: int = 20) -> List[Dict]:
@@ -58,6 +60,39 @@ class BookParser:
 
         paragraphs = [p.strip() for p in text.split("\n\n") if len(p.strip()) > 20]
         return self._split_into_chapters(paragraphs, 15)
+
+    def _parse_docx(self, path: str) -> List[Dict]:
+        try:
+            from docx import Document
+            from docx.oxml.ns import qn
+
+            doc = Document(path)
+            chapters = []
+            current_title = "Chapitre 1"
+            current_paras = []
+
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if not text:
+                    continue
+                # Headings become chapter titles
+                if para.style.name.startswith("Heading"):
+                    if current_paras:
+                        chapters.append({"title": current_title, "paragraphs": current_paras})
+                        current_paras = []
+                    current_title = text
+                elif len(text) > 10:
+                    current_paras.append(text)
+
+            if current_paras:
+                chapters.append({"title": current_title, "paragraphs": current_paras})
+
+            if not chapters:
+                return [{"title": "Vide", "paragraphs": ["Document Word vide ou non lisible."]}]
+
+            return chapters
+        except ImportError:
+            return [{"title": "Erreur", "paragraphs": ["Installez python-docx : pip install python-docx"]}]
 
     def _parse_epub(self, path: str) -> List[Dict]:
         try:

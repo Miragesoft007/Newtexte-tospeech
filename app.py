@@ -39,8 +39,8 @@ async def index():
 @app.post("/api/upload-book")
 async def upload_book(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
-    if ext not in (".txt", ".pdf", ".epub"):
-        raise HTTPException(400, "Format non supporté. Utilisez TXT, PDF ou EPUB.")
+    if ext not in (".txt", ".pdf", ".epub", ".docx", ".doc"):
+        raise HTTPException(400, "Format non supporté. Utilisez TXT, PDF, EPUB ou DOCX.")
 
     book_id = str(uuid.uuid4())
     dest = UPLOAD_DIR / f"{book_id}{ext}"

@@ -35,9 +35,9 @@
            ondragover="event.preventDefault()" ondrop="handleDrop(event)">
         <div class="drop-icon">📚</div>
         <p class="drop-label">Glissez ou cliquez</p>
-        <span class="drop-hint">TXT · PDF · EPUB</span>
+        <span class="drop-hint">TXT · PDF · EPUB · DOCX</span>
       </div>
-      <input type="file" id="book-input" accept=".txt,.pdf,.epub" onchange="uploadBook(this)" style="display:none" />
+      <input type="file" id="book-input" accept=".txt,.pdf,.epub,.docx,.doc" onchange="uploadBook(this)" style="display:none" />
       <div class="book-meta hidden" id="book-meta">
         <div class="book-name" id="book-name"></div>
         <div class="book-stats" id="book-stats"></div>
@@ -185,7 +185,7 @@
           <div class="feat">🇫🇷<br/>Français</div>
           <div class="feat">🇸🇦<br/>العربية</div>
           <div class="feat">🎤<br/>Clone vocal</div>
-          <div class="feat">📚<br/>PDF · EPUB · TXT</div>
+          <div class="feat">📚<br/>PDF · EPUB · DOCX</div>
         </div>
       </div>
       <div id="paras" class="paras hidden"></div>
