@@ -117,6 +117,12 @@
   font-size: 0.9rem;
 }
 
+.error-upgrade {
+  color: #818cf8;
+  margin-left: 0.4rem;
+  text-decoration: underline;
+}
+
 .audio-player {
   display: flex;
   flex-direction: column;

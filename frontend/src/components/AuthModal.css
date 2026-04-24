@@ -1,0 +1,93 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-card {
+  background: #1e1e2e;
+  border: 1px solid #2d2d44;
+  border-radius: 16px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 380px;
+  position: relative;
+}
+
+.modal-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.modal-card h2 {
+  font-size: 1.4rem;
+  margin-bottom: 1.5rem;
+  color: #e2e8f0;
+}
+
+.modal-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.modal-card input {
+  background: #13131f;
+  border: 1px solid #2d2d44;
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  padding: 0.7rem 1rem;
+}
+
+.modal-card input:focus {
+  outline: none;
+  border-color: #6366f1;
+}
+
+.modal-card button[type="submit"] {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.3rem;
+  transition: opacity 0.2s;
+}
+
+.modal-card button[type="submit"]:disabled { opacity: 0.6; }
+
+.modal-error {
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.modal-switch {
+  margin-top: 1.2rem;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+.modal-switch button {
+  background: none;
+  border: none;
+  color: #818cf8;
+  cursor: pointer;
+  font-size: 0.9rem;
+  margin-left: 0.3rem;
+  text-decoration: underline;
+}
